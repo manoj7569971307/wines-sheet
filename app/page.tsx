@@ -471,7 +471,7 @@ const Home: React.FC = () => {
         onSave: (data: Omit<Wine, 'id'>) => void;
         onCancel: () => void;
     }> = ({ wine, onSave, onCancel }) => {
-        const [formData, setFormData] = useState<Omit<Wine, 'id'>>(wine || { name: '', price: '', category: 'Whisky' });
+        const [formData, setFormData] = useState<Omit<Wine, 'id'>>(wine || { name: '', price: 0, category: 'Whisky' });
 
         const handleSave = () => {
             const priceNum = Number(formData.price);
@@ -498,7 +498,7 @@ const Home: React.FC = () => {
                             type="number"
                             placeholder="Price (₹)"
                             value={formData.price}
-                            onChange={(e) => setFormData({ ...formData, price: e.target.value })}
+                            onChange={(e) => setFormData({ ...formData, price: Number(e.target.value) })}
                             className="w-full border-2 border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-purple-500 focus:border-transparent"
                         />
                         <select

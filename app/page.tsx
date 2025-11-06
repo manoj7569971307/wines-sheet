@@ -8,7 +8,7 @@ const WINES_SCHEMA_VERSION = '2025-11-06-reset-204';
 
 // simple localStorage wrapper for JSON values
 const storage = {
-    get(key) {
+    get(key: string) {
         try {
             const raw = localStorage.getItem(key);
             if (raw === null) return null;
@@ -17,7 +17,7 @@ const storage = {
             return null;
         }
     },
-    set(key, value) {
+    set(key: string, value: any) {
         try {
             const toStore = typeof value === 'string' ? JSON.stringify(value) : JSON.stringify(value);
             localStorage.setItem(key, toStore);

@@ -4,9 +4,8 @@ import React, { useState, useEffect } from 'react';
 import { Plus, Edit2, Trash2, LogOut, Save, FileSpreadsheet, Eye, EyeOff, Calendar, Clock } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { initializeApp } from 'firebase/app';
-import { getFirestore, doc, setDoc, getDoc, collection, onSnapshot, query, orderBy } from 'firebase/firestore';
-import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import {sampleWinesData} from "@/app/sampleWines";
+import { getFirestore, doc, setDoc, getDoc } from 'firebase/firestore';
+import { getStorage, ref, uploadBytes } from 'firebase/storage';
 
 const firebaseConfig = {
     apiKey: "AIzaSyBf-dvyFjMttuLD43V4MBBRbuvfbwBRKsI",
@@ -22,12 +21,19 @@ const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 const storage = getStorage(app);
 
-// Types
+// Sample wines without category
+const sampleWinesData = [
+    { id: '1', name: 'Royal Challenge', price: 1200 },
+    { id: '2', name: 'Officers Choice', price: 800 },
+    { id: '3', name: 'McDowell No 1', price: 950 },
+    { id: '4', name: 'Signature', price: 1500 },
+    { id: '5', name: 'Imperial Blue', price: 750 }
+];
+
 interface Wine {
     id: string;
     name: string;
     price: number;
-    category: string;
 }
 
 interface Shop {
@@ -41,7 +47,6 @@ interface InventoryItem {
     wineId?: string;
     openingStock?: number;
     purchased?: number;
-    sold?: number;
     closingStock?: number;
     receiptDate?: string;
 }
@@ -73,14 +78,11 @@ const Home: React.FC = () => {
     const [selectedDate, setSelectedDate] = useState<string>(new Date().toISOString().split('T')[0]);
     const [savedDates, setSavedDates] = useState<SavedDate[]>([]);
     const [showHistory, setShowHistory] = useState(false);
-    const categories = ["Whisky", "Vodka", "Rum", "Brandy", "Beer", "Wine"];
 
-    // Login state
     const [loginType, setLoginType] = useState<'main' | 'sub' | null>(null);
     const [password, setPassword] = useState('');
     const [showPassword, setShowPassword] = useState(false);
     const [loginError, setLoginError] = useState('');
-
     const [isSyncing, setIsSyncing] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
 
@@ -89,7 +91,6 @@ const Home: React.FC = () => {
         loadWinesFromFirebase();
     }, []);
 
-    // Load saved dates history for active shop
     useEffect(() => {
         if (!activeShop) return;
 
@@ -97,7 +98,6 @@ const Home: React.FC = () => {
             try {
                 const historyDocRef = doc(db, 'inventory-history', activeShop);
                 const docSnap = await getDoc(historyDocRef);
-
                 if (docSnap.exists()) {
                     const data = docSnap.data();
                     setSavedDates(data.dates || []);
@@ -109,73 +109,23 @@ const Home: React.FC = () => {
                 setSavedDates([]);
             }
         };
-
         loadSavedDates();
-
-        // Real-time listener for history
-        const historyDocRef = doc(db, 'inventory-history', activeShop);
-        const unsubscribe = onSnapshot(historyDocRef, (docSnapshot) => {
-            if (docSnapshot.exists()) {
-                const data = docSnapshot.data();
-                setSavedDates(data.dates || []);
-            }
-        });
-
-        return () => unsubscribe();
     }, [activeShop]);
 
-    // Load inventory for selected date
     useEffect(() => {
         if (activeShop && selectedDate) {
             loadInventoryForDate(selectedDate);
         }
     }, [selectedDate, activeShop]);
 
-    // Real-time sync for wines
-    useEffect(() => {
-        const loadInitialWines = async () => {
-            try {
-                const winesDocRef = doc(db, 'wines', 'global');
-                const docSnap = await getDoc(winesDocRef);
-
-                if (docSnap.exists()) {
-                    const data = docSnap.data();
-                    if (data.wines && data.wines.length > 0) {
-                        setWines(data.wines);
-                    } else {
-                        await initializeSampleWines();
-                    }
-                } else {
-                    await initializeSampleWines();
-                }
-                setIsLoading(false);
-            } catch (error) {
-                console.error('Error loading initial wines:', error);
-                setIsLoading(false);
-            }
-        };
-
-        loadInitialWines();
-
-        const winesDocRef = doc(db, 'wines', 'global');
-        const unsubscribe = onSnapshot(winesDocRef, (docSnapshot) => {
-            if (docSnapshot.exists()) {
-                const data = docSnapshot.data();
-                if (data.wines) {
-                    setWines(data.wines);
-                }
-            }
-        });
-
-        return () => unsubscribe();
-    }, []);
-
     const initializeData = () => {
+
         const initialShops: Shop[] = [
             { id: 'shop_1', name: 'Downtown Wine Shop', adminId: 'admin_1' },
             { id: 'shop_2', name: 'Northside Liquor Store', adminId: 'admin_2' },
             { id: 'shop_3', name: 'Eastview Wine Mart', adminId: 'admin_3' },
         ];
+        console.log('manoj shops', initialShops)
         setShops(initialShops);
     };
 
@@ -198,22 +148,20 @@ const Home: React.FC = () => {
             console.error('Error loading wines from Firebase:', error);
             await initializeSampleWines();
         }
+        setIsLoading(false);
     };
 
     const initializeSampleWines = async () => {
-        console.log('manoj', sampleWinesData)
-        const sampleWines: Wine[] = sampleWinesData
-
         try {
             const winesDocRef = doc(db, 'wines', 'global');
             await setDoc(winesDocRef, {
-                wines: sampleWines,
+                wines: sampleWinesData,
                 lastUpdated: new Date().toISOString()
             });
-            setWines(sampleWines);
+            setWines(sampleWinesData);
         } catch (error) {
             console.error('Error initializing sample wines:', error);
-            setWines(sampleWines);
+            setWines(sampleWinesData);
         }
     };
 
@@ -221,42 +169,47 @@ const Home: React.FC = () => {
         if (!activeShop) return;
 
         try {
-            // Load specific date inventory
             const inventoryDocRef = doc(db, `inventories/${activeShop}/dates`, date);
             const docSnap = await getDoc(inventoryDocRef);
 
             if (docSnap.exists()) {
                 const data = docSnap.data();
                 setInventory(data.inventory || {});
-                console.log('Loaded inventory for date:', date, data.inventory);
             } else {
-                // Check previous day's closing stock
-                const prevDate = getPreviousDate(date);
-                const prevDocRef = doc(db, `inventories/${activeShop}/dates`, prevDate);
-                const prevSnap = await getDoc(prevDocRef);
+                // Find the most recent previous date with data
+                const prevDate = await findMostRecentInventoryDate(date);
 
-                if (prevSnap.exists()) {
-                    const prevData = prevSnap.data();
-                    const prevInventory = prevData.inventory || {};
+                if (prevDate) {
+                    const prevDocRef = doc(db, `inventories/${activeShop}/dates`, prevDate);
+                    const prevSnap = await getDoc(prevDocRef);
 
-                    // Create new inventory with opening stock from previous closing
-                    const newInv: InventoryMap = {};
-                    Object.keys(prevInventory).forEach(itemKey => {
-                        const prevItem = prevInventory[itemKey];
-                        newInv[itemKey] = {
-                            shopId: prevItem.shopId,
-                            wineId: prevItem.wineId,
-                            openingStock: prevItem.closingStock || 0,
-                            purchased: 0,
-                            sold: 0,
-                            closingStock: 0,
-                        };
-                    });
-                    setInventory(newInv);
-                    console.log('Created new inventory from previous day:', newInv);
+                    if (prevSnap.exists()) {
+                        const prevData = prevSnap.data();
+                        const prevInventory = prevData.inventory || {};
+
+                        // Create new inventory preserving opening stock from previous day
+                        const newInv: InventoryMap = {};
+                        Object.keys(prevInventory).forEach(itemKey => {
+                            const prevItem = prevInventory[itemKey];
+                            // Keep same opening stock if closing stock wasn't entered
+                            const opening = (prevItem.closingStock !== undefined && prevItem.closingStock !== null && prevItem.closingStock > 0)
+                                ? prevItem.closingStock
+                                : prevItem.openingStock || 0;
+
+                            newInv[itemKey] = {
+                                shopId: prevItem.shopId,
+                                wineId: prevItem.wineId,
+                                openingStock: opening,
+                                purchased: 0,
+                                closingStock: undefined,
+                            };
+                        });
+                        setInventory(newInv);
+                    } else {
+                        setInventory({});
+                    }
                 } else {
                     setInventory({});
-                    console.log('No previous data found, starting fresh');
                 }
             }
         } catch (error) {
@@ -265,10 +218,24 @@ const Home: React.FC = () => {
         }
     };
 
-    const getPreviousDate = (dateStr: string): string => {
-        const date = new Date(dateStr);
-        date.setDate(date.getDate() - 1);
-        return date.toISOString().split('T')[0];
+    const findMostRecentInventoryDate = async (currentDate: string): Promise<string | null> => {
+        // Look back up to 30 days
+        for (let i = 1; i <= 30; i++) {
+            const date = new Date(currentDate);
+            date.setDate(date.getDate() - i);
+            const checkDate = date.toISOString().split('T')[0];
+
+            try {
+                const docRef = doc(db, `inventories/${activeShop}/dates`, checkDate);
+                const docSnap = await getDoc(docRef);
+                if (docSnap.exists()) {
+                    return checkDate;
+                }
+            } catch (error) {
+                console.error('Error checking date:', checkDate, error);
+            }
+        }
+        return null;
     };
 
     const saveInventory = async () => {
@@ -280,10 +247,8 @@ const Home: React.FC = () => {
         setIsSyncing(true);
 
         try {
-            // Calculate closing stock for all items
             const updatedInventory: InventoryMap = {};
 
-            // Include all wines in inventory
             wines.forEach(wine => {
                 const key = `${activeShop}_${wine.id}`;
                 const item = inventory[key] || {
@@ -291,28 +256,14 @@ const Home: React.FC = () => {
                     wineId: wine.id,
                     openingStock: 0,
                     purchased: 0,
-                    sold: 0,
-                    closingStock: 0
+                    closingStock: undefined
                 };
 
-                const opening = item.openingStock || 0;
-                const purchased = item.purchased || 0;
-                const manualClosing = item.closingStock;
-
-                // If closing stock is manually entered, use it. Otherwise calculate
-                const closing = (manualClosing !== undefined && manualClosing !== null)
-                    ? manualClosing
-                    : (opening + purchased - (item.sold || 0));
-
-                updatedInventory[key] = {
-                    ...item,
-                    closingStock: closing,
-                };
+                updatedInventory[key] = { ...item };
             });
 
             const shop = shops.find(s => s.id === activeShop);
 
-            // Save to date-specific document
             const inventoryDocRef = doc(db, `inventories/${activeShop}/dates`, selectedDate);
             await setDoc(inventoryDocRef, {
                 inventory: updatedInventory,
@@ -321,7 +272,6 @@ const Home: React.FC = () => {
                 lastUpdated: new Date().toISOString()
             });
 
-            // Update history list
             const historyDocRef = doc(db, 'inventory-history', activeShop);
             const historySnap = await getDoc(historyDocRef);
 
@@ -330,7 +280,6 @@ const Home: React.FC = () => {
                 existingDates = historySnap.data().dates || [];
             }
 
-            // Check if date already exists
             const dateExists = existingDates.some(d => d.date === selectedDate);
             if (!dateExists) {
                 existingDates.push({
@@ -340,7 +289,6 @@ const Home: React.FC = () => {
                 });
             }
 
-            // Sort dates in descending order
             existingDates.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
             await setDoc(historyDocRef, {
@@ -348,13 +296,10 @@ const Home: React.FC = () => {
                 lastUpdated: new Date().toISOString()
             });
 
-            // Upload Excel
             await uploadExcelToFirebase(updatedInventory);
-
-            // Reload the saved inventory
             setInventory(updatedInventory);
 
-            alert('Inventory saved successfully! Data synced to Firebase and Excel uploaded.');
+            alert('Inventory saved successfully!');
         } catch (error) {
             console.error('Error saving inventory:', error);
             alert('Error saving inventory. Please try again.');
@@ -369,48 +314,23 @@ const Home: React.FC = () => {
             const data: (string | number)[][] = [];
 
             data.push(['SHOP NAME', '', shop?.name || '', '', '', '', 'DATE', selectedDate]);
-            data.push([
-                'Particulars',
-                'Category',
-                'Receipt Date',
-                'Opening Stock',
-                'Receipts',
-                'Sales',
-                'Closing Stock',
-                'Rate',
-                'Amount',
-            ]);
+            data.push(['Particulars', 'Receipt Date', 'Opening Stock', 'Receipts', 'Sales', 'Closing Stock', 'Rate', 'Amount']);
 
             wines.forEach((wine) => {
                 const key = `${activeShop}_${wine.id}`;
                 const invData = inventoryData[key] || {};
                 const openingStock = invData.openingStock || 0;
                 const purchased = invData.purchased || 0;
-                const closingStock = invData.closingStock !== undefined && invData.closingStock !== null
-                    ? invData.closingStock
-                    : (openingStock + purchased);
-                const sales = openingStock + purchased - closingStock;
+                const closingStock = invData.closingStock || 0;
+                const sales = (closingStock > 0) ? (openingStock + purchased - closingStock) : 0;
                 const amount = sales * wine.price;
                 const receiptDate = invData.receiptDate || '';
 
-                data.push([
-                    wine.name,
-                    wine.category,
-                    receiptDate,
-                    openingStock,
-                    purchased,
-                    sales,
-                    closingStock,
-                    wine.price,
-                    amount,
-                ]);
+                data.push([wine.name, receiptDate, openingStock, purchased, sales, closingStock, wine.price, amount]);
             });
 
             const ws = XLSX.utils.aoa_to_sheet(data);
-            ws['!cols'] = [
-                { wch: 25 }, { wch: 12 }, { wch: 12 }, { wch: 12 },
-                { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 10 }, { wch: 12 },
-            ];
+            ws['!cols'] = [{ wch: 25 }, { wch: 12 }, { wch: 12 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 10 }, { wch: 12 }];
 
             const wb = XLSX.utils.book_new();
             XLSX.utils.book_append_sheet(wb, ws, 'Inventory');
@@ -421,8 +341,6 @@ const Home: React.FC = () => {
             const filename = `${activeShop}_${selectedDate}.xlsx`;
             const storageRef = ref(storage, `inventory-sheets/${activeShop}/${filename}`);
             await uploadBytes(storageRef, blob);
-
-            console.log('Excel file uploaded successfully');
         } catch (error) {
             console.error('Error uploading Excel:', error);
         }
@@ -438,34 +356,23 @@ const Home: React.FC = () => {
         const data: (string | number)[][] = [];
 
         data.push(['SHOP NAME', '', shop?.name || '', '', '', '', 'DATE', selectedDate]);
-        data.push([
-            'Particulars', 'Category', 'Receipt Date', 'Opening Stock',
-            'Receipts', 'Sales', 'Closing Stock', 'Rate', 'Amount',
-        ]);
+        data.push(['Particulars', 'Receipt Date', 'Opening Stock', 'Receipts', 'Sales', 'Closing Stock', 'Rate', 'Amount']);
 
         wines.forEach((wine) => {
             const key = `${activeShop}_${wine.id}`;
             const invData = inventory[key] || {};
             const openingStock = invData.openingStock || 0;
             const purchased = invData.purchased || 0;
-            const closingStock = invData.closingStock !== undefined && invData.closingStock !== null
-                ? invData.closingStock
-                : (openingStock + purchased);
-            const sales = openingStock + purchased - closingStock;
+            const closingStock = invData.closingStock || 0;
+            const sales = (closingStock > 0) ? (openingStock + purchased - closingStock) : 0;
             const amount = sales * wine.price;
             const receiptDate = invData.receiptDate || '';
 
-            data.push([
-                wine.name, wine.category, receiptDate, openingStock,
-                purchased, sales, closingStock, wine.price, amount,
-            ]);
+            data.push([wine.name, receiptDate, openingStock, purchased, sales, closingStock, wine.price, amount]);
         });
 
         const ws = XLSX.utils.aoa_to_sheet(data);
-        ws['!cols'] = [
-            { wch: 25 }, { wch: 12 }, { wch: 12 }, { wch: 12 },
-            { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 10 }, { wch: 12 },
-        ];
+        ws['!cols'] = [{ wch: 25 }, { wch: 12 }, { wch: 12 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 10 }, { wch: 12 }];
 
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, 'Inventory');
@@ -474,10 +381,7 @@ const Home: React.FC = () => {
         XLSX.writeFile(wb, filename);
     };
 
-    const headers = [
-        "Particulars", "Category", "Rate", "Receipt Date",
-        "Opening Stock", "Receipts", "Sales", "Closing Stock", "Amount"
-    ];
+    const headers = ["Particulars", "Rate", "Receipt Date", "Opening Stock", "Receipts", "Sales", "Closing Stock", "Amount"];
 
     const handleLogin = () => {
         setLoginError('');
@@ -551,7 +455,7 @@ const Home: React.FC = () => {
         const parsedValue = value === '' ? 0 : parseInt(value, 10);
         const finalValue = isNaN(parsedValue) ? 0 : parsedValue;
 
-        let updates: any = { [field]: finalValue };
+        const updates: any = { [field]: finalValue };
 
         if (field === 'purchased' && finalValue > 0 && !currentData.receiptDate) {
             updates.receiptDate = selectedDate;
@@ -568,31 +472,20 @@ const Home: React.FC = () => {
         }));
     };
 
-    const calculateClosingStock = (shopId: string, wineId: string): number => {
-        const key = `${shopId}_${wineId}`;
-        const data = inventory[key] || {};
-
-        if (data.closingStock !== undefined && data.closingStock !== null) {
-            return data.closingStock;
-        }
-
-        const opening = data.openingStock || 0;
-        const purchased = data.purchased || 0;
-        const sold = data.sold || 0;
-        return opening + purchased - sold;
-    };
-
     const calculateSales = (shopId: string, wineId: string): number => {
         const key = `${shopId}_${wineId}`;
         const data = inventory[key] || {};
 
-        const opening = data.openingStock || 0;
-        const purchased = data.purchased || 0;
-        const closing = data.closingStock !== undefined && data.closingStock !== null
-            ? data.closingStock
-            : (data.sold || 0);
+        const closingStock = data.closingStock || 0;
 
-        return opening + purchased - closing;
+        // Only calculate sales if closing stock is greater than 0
+        if (closingStock > 0) {
+            const opening = data.openingStock || 0;
+            const purchased = data.purchased || 0;
+            return opening + purchased - closingStock;
+        }
+
+        return 0;
     };
 
     const WineForm: React.FC<{
@@ -600,7 +493,7 @@ const Home: React.FC = () => {
         onSave: (data: Omit<Wine, 'id'>) => void;
         onCancel: () => void;
     }> = ({ wine, onSave, onCancel }) => {
-        const [formData, setFormData] = useState<Omit<Wine, 'id'>>(wine || { name: '', price: 0, category: 'Whisky' });
+        const [formData, setFormData] = useState<Omit<Wine, 'id'>>(wine || { name: '', price: 0 });
 
         const handleSave = () => {
             const priceNum = Number(formData.price);
@@ -621,35 +514,20 @@ const Home: React.FC = () => {
                             placeholder="Wine Name"
                             value={formData.name}
                             onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                            className="w-full border-2 border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                            className="w-full border-2 border-gray-300 rounded-lg px-4 py-2"
                         />
                         <input
                             type="number"
                             placeholder="Price (₹)"
                             value={formData.price}
                             onChange={(e) => setFormData({ ...formData, price: Number(e.target.value) })}
-                            className="w-full border-2 border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                            className="w-full border-2 border-gray-300 rounded-lg px-4 py-2"
                         />
-                        <select
-                            value={formData.category}
-                            onChange={(e) => setFormData({ ...formData, category: e.target.value })}
-                            className="w-full border-2 border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-purple-500 focus:border-transparent"
-                        >
-                            {categories.map((c) => (
-                                <option key={c} value={c}>{c}</option>
-                            ))}
-                        </select>
                         <div className="flex gap-2">
-                            <button
-                                onClick={handleSave}
-                                className="flex-1 bg-purple-600 text-white py-2 rounded-lg hover:bg-purple-700 transition"
-                            >
+                            <button onClick={handleSave} className="flex-1 bg-purple-600 text-white py-2 rounded-lg hover:bg-purple-700">
                                 Save
                             </button>
-                            <button
-                                onClick={onCancel}
-                                className="flex-1 bg-gray-300 text-gray-700 py-2 rounded-lg hover:bg-gray-400 transition"
-                            >
+                            <button onClick={onCancel} className="flex-1 bg-gray-300 text-gray-700 py-2 rounded-lg hover:bg-gray-400">
                                 Cancel
                             </button>
                         </div>
@@ -675,13 +553,9 @@ const Home: React.FC = () => {
 
                     {!loginType ? (
                         <div className="space-y-4">
-                            <button
-                                onClick={() => setLoginType('main')}
-                                className="w-full bg-purple-600 text-white py-3 px-4 rounded-lg hover:bg-purple-700 transition font-semibold"
-                            >
+                            <button onClick={() => setLoginType('main')} className="w-full bg-purple-600 text-white py-3 px-4 rounded-lg hover:bg-purple-700">
                                 Login as Main Admin
                             </button>
-
                             <div className="relative">
                                 <div className="absolute inset-0 flex items-center">
                                     <div className="w-full border-t border-gray-300"></div>
@@ -690,11 +564,7 @@ const Home: React.FC = () => {
                                     <span className="px-2 bg-white text-gray-500">Or</span>
                                 </div>
                             </div>
-
-                            <button
-                                onClick={() => setLoginType('sub')}
-                                className="w-full bg-indigo-600 text-white py-3 px-4 rounded-lg hover:bg-indigo-700 transition font-semibold"
-                            >
+                            <button onClick={() => setLoginType('sub')} className="w-full bg-indigo-600 text-white py-3 px-4 rounded-lg hover:bg-indigo-700">
                                 Login as Shop Owner
                             </button>
                         </div>
@@ -705,12 +575,9 @@ const Home: React.FC = () => {
                                     {loginType === 'main' ? 'Main Admin Login' : 'Shop Owner Login'}
                                 </p>
                                 <p className="text-xs text-purple-600 mt-1">
-                                    {loginType === 'main'
-                                        ? 'Password: admin'
-                                        : 'Enter your shop ID as password (e.g., shop_1, shop_2, shop_3)'}
+                                    {loginType === 'main' ? 'Password: admin' : 'Enter shop ID (e.g., shop_1, shop_2, shop_3)'}
                                 </p>
                             </div>
-
                             <div className="relative text-black">
                                 <input
                                     type={showPassword ? 'text' : 'password'}
@@ -718,37 +585,18 @@ const Home: React.FC = () => {
                                     value={password}
                                     onChange={(e) => setPassword(e.target.value)}
                                     onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
-                                    className="w-full border-2 border-gray-300 rounded-lg px-4 py-3 pr-12 focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                                    className="w-full border-2 border-gray-300 rounded-lg px-4 py-3 pr-12"
                                 />
-                                <button
-                                    onClick={() => setShowPassword(!showPassword)}
-                                    className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-500 hover:text-gray-700"
-                                >
+                                <button onClick={() => setShowPassword(!showPassword)} className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-500">
                                     {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
                                 </button>
                             </div>
-
-                            {loginError && (
-                                <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded">
-                                    {loginError}
-                                </div>
-                            )}
-
+                            {loginError && <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded">{loginError}</div>}
                             <div className="flex gap-2">
-                                <button
-                                    onClick={handleLogin}
-                                    className="flex-1 bg-green-600 text-white py-3 px-4 rounded-lg hover:bg-green-700 transition font-semibold"
-                                >
+                                <button onClick={handleLogin} className="flex-1 bg-green-600 text-white py-3 px-4 rounded-lg hover:bg-green-700">
                                     Login
                                 </button>
-                                <button
-                                    onClick={() => {
-                                        setLoginType(null);
-                                        setPassword('');
-                                        setLoginError('');
-                                    }}
-                                    className="flex-1 bg-gray-300 text-gray-700 py-3 px-4 rounded-lg hover:bg-gray-400 transition font-semibold"
-                                >
+                                <button onClick={() => { setLoginType(null); setPassword(''); setLoginError(''); }} className="flex-1 bg-gray-300 text-gray-700 py-3 px-4 rounded-lg hover:bg-gray-400">
                                     Back
                                 </button>
                             </div>
@@ -767,13 +615,7 @@ const Home: React.FC = () => {
                         <h1 className="text-2xl font-bold">Wine Inventory System</h1>
                         <p className="text-purple-200 text-sm">{currentUser.name}</p>
                     </div>
-                    <button
-                        onClick={() => {
-                            setCurrentUser(null);
-                            setActiveShop(null);
-                        }}
-                        className="flex items-center gap-2 bg-purple-700 hover:bg-purple-800 px-4 py-2 rounded-lg transition"
-                    >
+                    <button onClick={() => { setCurrentUser(null); setActiveShop(null); }} className="flex items-center gap-2 bg-purple-700 hover:bg-purple-800 px-4 py-2 rounded-lg">
                         <LogOut size={20} />
                         Logout
                     </button>
@@ -786,39 +628,23 @@ const Home: React.FC = () => {
                         <div className="bg-white rounded-xl shadow-md p-6 mb-6">
                             <div className="flex justify-between items-center mb-4">
                                 <h2 className="text-2xl font-bold text-gray-800">Wine Management</h2>
-                                <button
-                                    onClick={() => setShowWineForm(true)}
-                                    className="flex items-center gap-2 bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 transition"
-                                >
+                                <button onClick={() => setShowWineForm(true)} className="flex items-center gap-2 bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700">
                                     <Plus size={20} />
                                     Add Wine
                                 </button>
                             </div>
-
                             <div className="grid gap-4 max-h-96 overflow-y-auto">
                                 {wines.map((wine) => (
-                                    <div
-                                        key={wine.id}
-                                        className="flex justify-between items-center p-4 border-2 border-gray-200 rounded-lg hover:border-purple-300 transition"
-                                    >
+                                    <div key={wine.id} className="flex justify-between items-center p-4 border-2 border-gray-200 rounded-lg hover:border-purple-300">
                                         <div>
                                             <h3 className="font-semibold text-lg text-black">{wine.name}</h3>
-                                            <p className="text-gray-600">₹{wine.price} - {wine.category}</p>
+                                            <p className="text-gray-600">₹{wine.price}</p>
                                         </div>
                                         <div className="flex gap-2">
-                                            <button
-                                                onClick={() => {
-                                                    setEditingWine(wine);
-                                                    setShowWineForm(true);
-                                                }}
-                                                className="p-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition"
-                                            >
+                                            <button onClick={() => { setEditingWine(wine); setShowWineForm(true); }} className="p-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600">
                                                 <Edit2 size={18} />
                                             </button>
-                                            <button
-                                                onClick={() => deleteWine(wine.id)}
-                                                className="p-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition"
-                                            >
+                                            <button onClick={() => deleteWine(wine.id)} className="p-2 bg-red-500 text-white rounded-lg hover:bg-red-600">
                                                 <Trash2 size={18} />
                                             </button>
                                         </div>
@@ -829,16 +655,10 @@ const Home: React.FC = () => {
 
                         <div className="bg-white rounded-xl shadow-md p-6">
                             <h2 className="text-2xl font-bold text-gray-800 mb-4">View Shop Inventory</h2>
-                            <select
-                                value={activeShop || ''}
-                                onChange={(e) => setActiveShop(e.target.value)}
-                                className="w-full border-2 text-black border-gray-300 rounded-lg px-4 py-3 focus:ring-2 focus:ring-purple-500 focus:border-transparent"
-                            >
+                            <select value={activeShop || ''} onChange={(e) => setActiveShop(e.target.value)} className="w-full border-2 text-black border-gray-300 rounded-lg px-4 py-3">
                                 <option value="">Select a shop to view inventory</option>
                                 {shops.map((shop) => (
-                                    <option key={shop.id} value={shop.id}>
-                                        {shop.name} ({shop.id})
-                                    </option>
+                                    <option key={shop.id} value={shop.id}>{shop.name} ({shop.id})</option>
                                 ))}
                             </select>
                         </div>
@@ -852,17 +672,11 @@ const Home: React.FC = () => {
                                 Inventory - {shops.find((s) => s.id === activeShop)?.name}
                             </h2>
                             <div className="flex items-center gap-2 flex-wrap">
-                                <button
-                                    onClick={() => setShowHistory(!showHistory)}
-                                    className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition"
-                                >
+                                <button onClick={() => setShowHistory(!showHistory)} className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700">
                                     <Calendar size={20} />
                                     History
                                 </button>
-                                <button
-                                    onClick={() => setSelectedDate(new Date().toISOString().split('T')[0])}
-                                    className="flex items-center gap-2 bg-orange-600 text-white px-4 py-2 rounded-lg hover:bg-orange-700 transition"
-                                >
+                                <button onClick={() => setSelectedDate(new Date().toISOString().split('T')[0])} className="flex items-center gap-2 bg-orange-600 text-white px-4 py-2 rounded-lg hover:bg-orange-700">
                                     <Clock size={20} />
                                     Today
                                 </button>
@@ -870,20 +684,13 @@ const Home: React.FC = () => {
                                     type="date"
                                     value={selectedDate}
                                     onChange={(e) => setSelectedDate(e.target.value)}
-                                    className="border-2 text-black border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                                    className="border-2 text-black border-gray-300 rounded-lg px-4 py-2"
                                 />
-                                <button
-                                    onClick={saveInventory}
-                                    disabled={isSyncing}
-                                    className="flex items-center gap-2 bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition disabled:bg-gray-400 disabled:cursor-not-allowed"
-                                >
+                                <button onClick={saveInventory} disabled={isSyncing} className="flex items-center gap-2 bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 disabled:bg-gray-400">
                                     <Save size={20} />
                                     {isSyncing ? 'Syncing...' : 'Save'}
                                 </button>
-                                <button
-                                    onClick={exportToExcel}
-                                    className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition"
-                                >
+                                <button onClick={exportToExcel} className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700">
                                     <FileSpreadsheet size={20} />
                                     Export
                                 </button>
@@ -897,10 +704,7 @@ const Home: React.FC = () => {
                                     {savedDates.map((saved) => (
                                         <button
                                             key={saved.date}
-                                            onClick={() => {
-                                                setSelectedDate(saved.date);
-                                                setShowHistory(false);
-                                            }}
+                                            onClick={() => { setSelectedDate(saved.date); setShowHistory(false); }}
                                             className={`p-3 rounded-lg border-2 transition ${
                                                 selectedDate === saved.date
                                                     ? 'bg-purple-600 text-white border-purple-600'
@@ -908,9 +712,7 @@ const Home: React.FC = () => {
                                             }`}
                                         >
                                             <div className="text-sm font-semibold">{saved.date}</div>
-                                            <div className="text-xs opacity-75">
-                                                {new Date(saved.timestamp).toLocaleTimeString()}
-                                            </div>
+                                            <div className="text-xs opacity-75">{new Date(saved.timestamp).toLocaleTimeString()}</div>
                                         </button>
                                     ))}
                                 </div>
@@ -922,10 +724,7 @@ const Home: React.FC = () => {
                                 <thead className="bg-purple-100 sticky top-0">
                                 <tr>
                                     {headers.map((h) => (
-                                        <th
-                                            key={h}
-                                            className="px-4 py-3 text-left text-sm font-semibold text-gray-700"
-                                        >
+                                        <th key={h} className="px-4 py-3 text-left text-sm font-semibold text-gray-700">
                                             {h}
                                         </th>
                                     ))}
@@ -935,28 +734,17 @@ const Home: React.FC = () => {
                                 {wines.map((wine) => {
                                     const key = `${activeShop}_${wine.id}`;
                                     const data = inventory[key] || {};
-                                    const closingStock = calculateClosingStock(activeShop, wine.id);
+                                    const closingStock = data.closingStock || 0;
                                     const sales = calculateSales(activeShop, wine.id);
                                     const amount = sales * wine.price;
                                     const canEditAll = currentUser.type === 'main';
                                     const canEditClosing = currentUser.type === 'sub' && currentUser.shopId === activeShop;
 
-                                    const displayClosing = data.closingStock !== undefined && data.closingStock !== null
-                                        ? data.closingStock
-                                        : closingStock;
-
                                     return (
                                         <tr key={wine.id} className="border-b hover:bg-gray-50">
                                             <td className="px-4 py-3 font-medium text-black">{wine.name}</td>
-                                            <td className="px-4 py-3">
-                                                <span className="px-2 py-1 bg-purple-100 text-purple-800 rounded text-xs font-semibold">
-                                                    {wine.category}
-                                                </span>
-                                            </td>
                                             <td className="px-4 py-3 text-black">₹{wine.price}</td>
-                                            <td className="px-4 py-3 text-sm text-gray-600">
-                                                {data.receiptDate || '-'}
-                                            </td>
+                                            <td className="px-4 py-3 text-sm text-gray-600">{data.receiptDate || '-'}</td>
                                             <td className="px-4 py-3">
                                                 <input
                                                     type="number"
@@ -981,7 +769,7 @@ const Home: React.FC = () => {
                                             <td className="px-4 py-3">
                                                 <input
                                                     type="number"
-                                                    value={displayClosing}
+                                                    value={closingStock}
                                                     onChange={(e) => updateInventory(activeShop, wine.id, 'closingStock', e.target.value)}
                                                     disabled={!canEditClosing && !canEditAll}
                                                     className="w-24 border border-gray-300 rounded px-2 py-1 text-purple-600 font-semibold disabled:bg-gray-100"
@@ -1004,10 +792,7 @@ const Home: React.FC = () => {
                 <WineForm
                     wine={editingWine}
                     onSave={addOrUpdateWine}
-                    onCancel={() => {
-                        setShowWineForm(false);
-                        setEditingWine(null);
-                    }}
+                    onCancel={() => { setShowWineForm(false); setEditingWine(null); }}
                 />
             )}
         </div>

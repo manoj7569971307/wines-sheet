@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useState, useEffect } from 'react';
-import { Plus, Edit2, Trash2, LogOut, Save, FileSpreadsheet, Eye, EyeOff, Calendar, Clock } from 'lucide-react';
+import { Plus, Edit2, Trash2, LogOut, Save, FileSpreadsheet, Eye, EyeOff, Calendar, Clock, FileText } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { initializeApp } from 'firebase/app';
 import { getFirestore, doc, setDoc, getDoc } from 'firebase/firestore';
@@ -21,19 +21,19 @@ const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 const storage = getStorage(app);
 
-// Sample wines without category
 const sampleWinesData = [
-    { id: '1', name: 'Royal Challenge', price: 1200 },
-    { id: '2', name: 'Officers Choice', price: 800 },
-    { id: '3', name: 'McDowell No 1', price: 950 },
-    { id: '4', name: 'Signature', price: 1500 },
-    { id: '5', name: 'Imperial Blue', price: 750 }
+    { id: '1', name: 'Royal Challenge', price: 1200, packSize: '750ml' },
+    { id: '2', name: 'Officers Choice', price: 800, packSize: '750ml' },
+    { id: '3', name: 'McDowell No 1', price: 950, packSize: '750ml' },
+    { id: '4', name: 'Signature', price: 1500, packSize: '1L' },
+    { id: '5', name: 'Imperial Blue', price: 750, packSize: '750ml' }
 ];
 
 interface Wine {
     id: string;
     name: string;
     price: number;
+    packSize?: string;
 }
 
 interface Shop {
@@ -47,6 +47,8 @@ interface InventoryItem {
     wineId?: string;
     openingStock?: number;
     purchased?: number;
+    trnIn?: number;
+    trnOut?: number;
     closingStock?: number;
     receiptDate?: string;
 }
@@ -78,6 +80,7 @@ const Home: React.FC = () => {
     const [selectedDate, setSelectedDate] = useState<string>(new Date().toISOString().split('T')[0]);
     const [savedDates, setSavedDates] = useState<SavedDate[]>([]);
     const [showHistory, setShowHistory] = useState(false);
+    const [notes, setNotes] = useState('');
 
     const [loginType, setLoginType] = useState<'main' | 'sub' | null>(null);
     const [password, setPassword] = useState('');
@@ -119,13 +122,11 @@ const Home: React.FC = () => {
     }, [selectedDate, activeShop]);
 
     const initializeData = () => {
-
         const initialShops: Shop[] = [
             { id: 'shop_1', name: 'Downtown Wine Shop', adminId: 'admin_1' },
             { id: 'shop_2', name: 'Northside Liquor Store', adminId: 'admin_2' },
             { id: 'shop_3', name: 'Eastview Wine Mart', adminId: 'admin_3' },
         ];
-        console.log('manoj shops', initialShops)
         setShops(initialShops);
     };
 
@@ -175,8 +176,8 @@ const Home: React.FC = () => {
             if (docSnap.exists()) {
                 const data = docSnap.data();
                 setInventory(data.inventory || {});
+                setNotes(data.notes || '');
             } else {
-                // Find the most recent previous date with data
                 const prevDate = await findMostRecentInventoryDate(date);
 
                 if (prevDate) {
@@ -187,11 +188,9 @@ const Home: React.FC = () => {
                         const prevData = prevSnap.data();
                         const prevInventory = prevData.inventory || {};
 
-                        // Create new inventory preserving opening stock from previous day
                         const newInv: InventoryMap = {};
                         Object.keys(prevInventory).forEach(itemKey => {
                             const prevItem = prevInventory[itemKey];
-                            // Keep same opening stock if closing stock wasn't entered
                             const opening = (prevItem.closingStock !== undefined && prevItem.closingStock !== null && prevItem.closingStock > 0)
                                 ? prevItem.closingStock
                                 : prevItem.openingStock || 0;
@@ -201,25 +200,30 @@ const Home: React.FC = () => {
                                 wineId: prevItem.wineId,
                                 openingStock: opening,
                                 purchased: 0,
+                                trnIn: 0,
+                                trnOut: 0,
                                 closingStock: undefined,
                             };
                         });
                         setInventory(newInv);
+                        setNotes('');
                     } else {
                         setInventory({});
+                        setNotes('');
                     }
                 } else {
                     setInventory({});
+                    setNotes('');
                 }
             }
         } catch (error) {
             console.error('Error loading inventory for date:', error);
             setInventory({});
+            setNotes('');
         }
     };
 
     const findMostRecentInventoryDate = async (currentDate: string): Promise<string | null> => {
-        // Look back up to 30 days
         for (let i = 1; i <= 30; i++) {
             const date = new Date(currentDate);
             date.setDate(date.getDate() - i);
@@ -236,6 +240,27 @@ const Home: React.FC = () => {
             }
         }
         return null;
+    };
+
+    const calculateTotals = () => {
+        let totalQuantity = 0;
+        let totalAmount = 0;
+        let totalClosingStockValue = 0;
+
+        wines.forEach(wine => {
+            const key = `${activeShop}_${wine.id}`;
+            const data = inventory[key] || {};
+            const closingStock = data.closingStock || 0;
+            const sales = calculateSales(activeShop!, wine.id);
+            const amount = sales * wine.price;
+            const closingStockValue = closingStock * wine.price;
+
+            totalQuantity += sales;
+            totalAmount += amount;
+            totalClosingStockValue += closingStockValue;
+        });
+
+        return { totalQuantity, totalAmount, totalClosingStockValue };
     };
 
     const saveInventory = async () => {
@@ -256,6 +281,8 @@ const Home: React.FC = () => {
                     wineId: wine.id,
                     openingStock: 0,
                     purchased: 0,
+                    trnIn: 0,
+                    trnOut: 0,
                     closingStock: undefined
                 };
 
@@ -267,6 +294,7 @@ const Home: React.FC = () => {
             const inventoryDocRef = doc(db, `inventories/${activeShop}/dates`, selectedDate);
             await setDoc(inventoryDocRef, {
                 inventory: updatedInventory,
+                notes: notes,
                 date: selectedDate,
                 shopName: shop?.name || '',
                 lastUpdated: new Date().toISOString()
@@ -313,24 +341,45 @@ const Home: React.FC = () => {
             const shop = shops.find((s) => s.id === activeShop);
             const data: (string | number)[][] = [];
 
-            data.push(['SHOP NAME', '', shop?.name || '', '', '', '', 'DATE', selectedDate]);
-            data.push(['Particulars', 'Receipt Date', 'Opening Stock', 'Receipts', 'Sales', 'Closing Stock', 'Rate', 'Amount']);
+            data.push(['SHOP NAME', '', shop?.name || '', '', '', '', '', '', '', '', '', 'DATE', selectedDate]);
+            data.push(['Particulars', 'Pack Size', 'Opening Stock', 'Receipt', 'TRN In', 'TRN Out', 'Total', 'Closing Stock', 'Sales', 'Rate', 'Amount']);
+
+            let totalQuantity = 0;
+            let totalAmount = 0;
+            let totalClosingStockValue = 0;
 
             wines.forEach((wine) => {
                 const key = `${activeShop}_${wine.id}`;
                 const invData = inventoryData[key] || {};
                 const openingStock = invData.openingStock || 0;
                 const purchased = invData.purchased || 0;
+                const trnIn = invData.trnIn || 0;
+                const trnOut = invData.trnOut || 0;
+                const total = openingStock + purchased + trnIn - trnOut;
                 const closingStock = invData.closingStock || 0;
-                const sales = (closingStock > 0) ? (openingStock + purchased - closingStock) : 0;
+                const sales = (closingStock > 0) ? (total - closingStock) : 0;
                 const amount = sales * wine.price;
-                const receiptDate = invData.receiptDate || '';
+                const closingStockValue = closingStock * wine.price;
 
-                data.push([wine.name, receiptDate, openingStock, purchased, sales, closingStock, wine.price, amount]);
+                totalQuantity += sales;
+                totalAmount += amount;
+                totalClosingStockValue += closingStockValue;
+
+                data.push([wine.name, wine.packSize || '-', openingStock, purchased, trnIn, trnOut, total, closingStock, sales, wine.price, amount]);
             });
 
+            data.push([]);
+            data.push(['', '', '', '', '', '', '', '', '', 'Total Quantity:', totalQuantity]);
+            data.push(['', '', '', '', '', '', '', '', '', 'Total Closing Stock Value:', totalClosingStockValue]);
+            data.push(['', '', '', '', '', '', '', '', '', 'Total Amount:', totalAmount]);
+
+            if (notes) {
+                data.push([]);
+                data.push(['Notes:', notes]);
+            }
+
             const ws = XLSX.utils.aoa_to_sheet(data);
-            ws['!cols'] = [{ wch: 25 }, { wch: 12 }, { wch: 12 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 10 }, { wch: 12 }];
+            ws['!cols'] = [{ wch: 25 }, { wch: 12 }, { wch: 12 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 10 }, { wch: 10 }, { wch: 12 }];
 
             const wb = XLSX.utils.book_new();
             XLSX.utils.book_append_sheet(wb, ws, 'Inventory');
@@ -355,24 +404,45 @@ const Home: React.FC = () => {
         const shop = shops.find((s) => s.id === activeShop);
         const data: (string | number)[][] = [];
 
-        data.push(['SHOP NAME', '', shop?.name || '', '', '', '', 'DATE', selectedDate]);
-        data.push(['Particulars', 'Receipt Date', 'Opening Stock', 'Receipts', 'Sales', 'Closing Stock', 'Rate', 'Amount']);
+        data.push(['SHOP NAME', '', shop?.name || '', '', '', '', '', '', '', '', '', 'DATE', selectedDate]);
+        data.push(['Particulars', 'Pack Size', 'Opening Stock', 'Receipt', 'TRN In', 'TRN Out', 'Total', 'Closing Stock', 'Sales', 'Rate', 'Amount']);
+
+        let totalQuantity = 0;
+        let totalAmount = 0;
+        let totalClosingStockValue = 0;
 
         wines.forEach((wine) => {
             const key = `${activeShop}_${wine.id}`;
             const invData = inventory[key] || {};
             const openingStock = invData.openingStock || 0;
             const purchased = invData.purchased || 0;
+            const trnIn = invData.trnIn || 0;
+            const trnOut = invData.trnOut || 0;
+            const total = openingStock + purchased + trnIn - trnOut;
             const closingStock = invData.closingStock || 0;
-            const sales = (closingStock > 0) ? (openingStock + purchased - closingStock) : 0;
+            const sales = (closingStock > 0) ? (total - closingStock) : 0;
             const amount = sales * wine.price;
-            const receiptDate = invData.receiptDate || '';
+            const closingStockValue = closingStock * wine.price;
 
-            data.push([wine.name, receiptDate, openingStock, purchased, sales, closingStock, wine.price, amount]);
+            totalQuantity += sales;
+            totalAmount += amount;
+            totalClosingStockValue += closingStockValue;
+
+            data.push([wine.name, wine.packSize || '-', openingStock, purchased, trnIn, trnOut, total, closingStock, sales, wine.price, amount]);
         });
 
+        data.push([]);
+        data.push(['', '', '', '', '', '', '', '', '', 'Total Quantity:', totalQuantity]);
+        data.push(['', '', '', '', '', '', '', '', '', 'Total Closing Stock Value:', totalClosingStockValue]);
+        data.push(['', '', '', '', '', '', '', '', '', 'Total Amount:', totalAmount]);
+
+        if (notes) {
+            data.push([]);
+            data.push(['Notes:', notes]);
+        }
+
         const ws = XLSX.utils.aoa_to_sheet(data);
-        ws['!cols'] = [{ wch: 25 }, { wch: 12 }, { wch: 12 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 10 }, { wch: 12 }];
+        ws['!cols'] = [{ wch: 25 }, { wch: 12 }, { wch: 12 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 10 }, { wch: 10 }, { wch: 12 }];
 
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, 'Inventory');
@@ -381,7 +451,128 @@ const Home: React.FC = () => {
         XLSX.writeFile(wb, filename);
     };
 
-    const headers = ["Particulars", "Rate", "Receipt Date", "Opening Stock", "Receipts", "Sales", "Closing Stock", "Amount"];
+    const exportToPDF = () => {
+        if (!activeShop) {
+            alert('Please select a shop first');
+            return;
+        }
+
+        const shop = shops.find((s) => s.id === activeShop);
+        let totalQuantity = 0;
+        let totalAmount = 0;
+        let totalClosingStockValue = 0;
+
+        let htmlContent = `
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <style>
+                    body { font-family: Arial, sans-serif; margin: 20px; }
+                    h1 { text-align: center; color: #7c3aed; }
+                    .header { display: flex; justify-content: space-between; margin-bottom: 20px; }
+                    table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+                    th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+                    th { background-color: #7c3aed; color: white; }
+                    tr:nth-child(even) { background-color: #f2f2f2; }
+                    .totals { margin-top: 20px; font-weight: bold; }
+                    .notes { margin-top: 20px; padding: 10px; border: 1px solid #ddd; background-color: #f9f9f9; }
+                </style>
+            </head>
+            <body>
+                <h1>Wine Inventory Report</h1>
+                <div class="header">
+                    <div><strong>Shop Name:</strong> ${shop?.name || ''}</div>
+                    <div><strong>Date:</strong> ${selectedDate}</div>
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Particulars</th>
+                            <th>Pack Size</th>
+                            <th>Opening Stock</th>
+                            <th>Receipt</th>
+                            <th>TRN In</th>
+                            <th>TRN Out</th>
+                            <th>Total</th>
+                            <th>Closing Stock</th>
+                            <th>Sales</th>
+                            <th>Rate</th>
+                            <th>Amount</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+        `;
+
+        wines.forEach((wine) => {
+            const key = `${activeShop}_${wine.id}`;
+            const invData = inventory[key] || {};
+            const openingStock = invData.openingStock || 0;
+            const purchased = invData.purchased || 0;
+            const trnIn = invData.trnIn || 0;
+            const trnOut = invData.trnOut || 0;
+            const total = openingStock + purchased + trnIn - trnOut;
+            const closingStock = invData.closingStock || 0;
+            const sales = (closingStock > 0) ? (total - closingStock) : 0;
+            const amount = sales * wine.price;
+            const closingStockValue = closingStock * wine.price;
+
+            totalQuantity += sales;
+            totalAmount += amount;
+            totalClosingStockValue += closingStockValue;
+
+            htmlContent += `
+                <tr>
+                    <td>${wine.name}</td>
+                    <td>${wine.packSize || '-'}</td>
+                    <td>${openingStock}</td>
+                    <td>${purchased}</td>
+                    <td>${trnIn}</td>
+                    <td>${trnOut}</td>
+                    <td>${total}</td>
+                    <td>${closingStock}</td>
+                    <td>${sales}</td>
+                    <td>₹${wine.price}</td>
+                    <td>₹${amount.toLocaleString()}</td>
+                </tr>
+            `;
+        });
+
+        htmlContent += `
+                    </tbody>
+                </table>
+                <div class="totals">
+                    <p>Total Quantity: ${totalQuantity}</p>
+                    <p>Total Closing Stock Value: ₹${totalClosingStockValue.toLocaleString()}</p>
+                    <p>Total Amount: ₹${totalAmount.toLocaleString()}</p>
+                </div>
+        `;
+
+        if (notes) {
+            htmlContent += `
+                <div class="notes">
+                    <strong>Notes:</strong><br/>
+                    ${notes.replace(/\n/g, '<br/>')}
+                </div>
+            `;
+        }
+
+        htmlContent += `
+            </body>
+            </html>
+        `;
+
+        const printWindow = window.open('', '', 'height=600,width=800');
+        if (printWindow) {
+            printWindow.document.write(htmlContent);
+            printWindow.document.close();
+            printWindow.focus();
+            setTimeout(() => {
+                printWindow.print();
+            }, 250);
+        }
+    };
+
+    const headers = ["Particulars", "Pack Size", "Opening Stock", "Receipt", "TRN In", "TRN Out", "Total", "Closing Stock", "Sales", "Rate", "Amount"];
 
     const handleLogin = () => {
         setLoginError('');
@@ -478,14 +669,28 @@ const Home: React.FC = () => {
 
         const closingStock = data.closingStock || 0;
 
-        // Only calculate sales if closing stock is greater than 0
         if (closingStock > 0) {
             const opening = data.openingStock || 0;
             const purchased = data.purchased || 0;
-            return opening + purchased - closingStock;
+            const trnIn = data.trnIn || 0;
+            const trnOut = data.trnOut || 0;
+            const total = opening + purchased + trnIn - trnOut;
+            return total - closingStock;
         }
 
         return 0;
+    };
+
+    const calculateTotal = (shopId: string, wineId: string): number => {
+        const key = `${shopId}_${wineId}`;
+        const data = inventory[key] || {};
+
+        const opening = data.openingStock || 0;
+        const purchased = data.purchased || 0;
+        const trnIn = data.trnIn || 0;
+        const trnOut = data.trnOut || 0;
+
+        return opening + purchased + trnIn - trnOut;
     };
 
     const WineForm: React.FC<{
@@ -493,7 +698,7 @@ const Home: React.FC = () => {
         onSave: (data: Omit<Wine, 'id'>) => void;
         onCancel: () => void;
     }> = ({ wine, onSave, onCancel }) => {
-        const [formData, setFormData] = useState<Omit<Wine, 'id'>>(wine || { name: '', price: 0 });
+        const [formData, setFormData] = useState<Omit<Wine, 'id'>>(wine || { name: '', price: 0, packSize: '' });
 
         const handleSave = () => {
             const priceNum = Number(formData.price);
@@ -514,6 +719,13 @@ const Home: React.FC = () => {
                             placeholder="Wine Name"
                             value={formData.name}
                             onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                            className="w-full border-2 border-gray-300 rounded-lg px-4 py-2"
+                        />
+                        <input
+                            type="text"
+                            placeholder="Pack Size (e.g., 750ml)"
+                            value={formData.packSize || ''}
+                            onChange={(e) => setFormData({ ...formData, packSize: e.target.value })}
                             className="w-full border-2 border-gray-300 rounded-lg px-4 py-2"
                         />
                         <input
@@ -638,7 +850,7 @@ const Home: React.FC = () => {
                                     <div key={wine.id} className="flex justify-between items-center p-4 border-2 border-gray-200 rounded-lg hover:border-purple-300">
                                         <div>
                                             <h3 className="font-semibold text-lg text-black">{wine.name}</h3>
-                                            <p className="text-gray-600">₹{wine.price}</p>
+                                            <p className="text-gray-600">₹{wine.price} • {wine.packSize || 'N/A'}</p>
                                         </div>
                                         <div className="flex gap-2">
                                             <button onClick={() => { setEditingWine(wine); setShowWineForm(true); }} className="p-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600">
@@ -692,7 +904,11 @@ const Home: React.FC = () => {
                                 </button>
                                 <button onClick={exportToExcel} className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700">
                                     <FileSpreadsheet size={20} />
-                                    Export
+                                    Excel
+                                </button>
+                                <button onClick={exportToPDF} className="flex items-center gap-2 bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700">
+                                    <FileText size={20} />
+                                    PDF
                                 </button>
                             </div>
                         </div>
@@ -735,6 +951,7 @@ const Home: React.FC = () => {
                                     const key = `${activeShop}_${wine.id}`;
                                     const data = inventory[key] || {};
                                     const closingStock = data.closingStock || 0;
+                                    const total = calculateTotal(activeShop, wine.id);
                                     const sales = calculateSales(activeShop, wine.id);
                                     const amount = sales * wine.price;
                                     const canEditAll = currentUser.type === 'main';
@@ -743,15 +960,14 @@ const Home: React.FC = () => {
                                     return (
                                         <tr key={wine.id} className="border-b hover:bg-gray-50">
                                             <td className="px-4 py-3 font-medium text-black">{wine.name}</td>
-                                            <td className="px-4 py-3 text-black">₹{wine.price}</td>
-                                            <td className="px-4 py-3 text-sm text-gray-600">{data.receiptDate || '-'}</td>
+                                            <td className="px-4 py-3 text-black">{wine.packSize || '-'}</td>
                                             <td className="px-4 py-3">
                                                 <input
                                                     type="number"
                                                     value={data.openingStock || 0}
                                                     onChange={(e) => updateInventory(activeShop, wine.id, 'openingStock', e.target.value)}
                                                     disabled={!canEditAll}
-                                                    className="w-24 border border-gray-300 rounded px-2 py-1 text-black disabled:bg-gray-100"
+                                                    className="w-20 border border-gray-300 rounded px-2 py-1 text-black disabled:bg-gray-100"
                                                 />
                                             </td>
                                             <td className="px-4 py-3">
@@ -760,11 +976,29 @@ const Home: React.FC = () => {
                                                     value={data.purchased || 0}
                                                     onChange={(e) => updateInventory(activeShop, wine.id, 'purchased', e.target.value)}
                                                     disabled={!canEditAll}
-                                                    className="w-24 border text-black border-gray-300 rounded px-2 py-1 disabled:bg-gray-100"
+                                                    className="w-20 border text-black border-gray-300 rounded px-2 py-1 disabled:bg-gray-100"
                                                 />
                                             </td>
                                             <td className="px-4 py-3">
-                                                <span className="font-semibold text-blue-600">{sales}</span>
+                                                <input
+                                                    type="number"
+                                                    value={data.trnIn || 0}
+                                                    onChange={(e) => updateInventory(activeShop, wine.id, 'trnIn', e.target.value)}
+                                                    disabled={!canEditAll}
+                                                    className="w-20 border text-black border-gray-300 rounded px-2 py-1 disabled:bg-gray-100"
+                                                />
+                                            </td>
+                                            <td className="px-4 py-3">
+                                                <input
+                                                    type="number"
+                                                    value={data.trnOut || 0}
+                                                    onChange={(e) => updateInventory(activeShop, wine.id, 'trnOut', e.target.value)}
+                                                    disabled={!canEditAll}
+                                                    className="w-20 border text-black border-gray-300 rounded px-2 py-1 disabled:bg-gray-100"
+                                                />
+                                            </td>
+                                            <td className="px-4 py-3">
+                                                <span className="font-semibold text-indigo-600">{total}</span>
                                             </td>
                                             <td className="px-4 py-3">
                                                 <input
@@ -772,9 +1006,13 @@ const Home: React.FC = () => {
                                                     value={closingStock}
                                                     onChange={(e) => updateInventory(activeShop, wine.id, 'closingStock', e.target.value)}
                                                     disabled={!canEditClosing && !canEditAll}
-                                                    className="w-24 border border-gray-300 rounded px-2 py-1 text-purple-600 font-semibold disabled:bg-gray-100"
+                                                    className="w-20 border border-gray-300 rounded px-2 py-1 text-purple-600 font-semibold disabled:bg-gray-100"
                                                 />
                                             </td>
+                                            <td className="px-4 py-3">
+                                                <span className="font-semibold text-blue-600">{sales}</span>
+                                            </td>
+                                            <td className="px-4 py-3 text-black">₹{wine.price}</td>
                                             <td className="px-4 py-3">
                                                 <span className="font-semibold text-green-600">₹{amount.toLocaleString()}</span>
                                             </td>
@@ -784,6 +1022,32 @@ const Home: React.FC = () => {
                                 </tbody>
                             </table>
                         </div>
+
+                        <div className="mt-6 bg-purple-50 rounded-lg p-4">
+                            <div className="flex justify-end gap-8 text-lg font-bold flex-wrap">
+                                <div className="text-gray-800">
+                                    Total Quantity: <span className="text-purple-600">{calculateTotals().totalQuantity}</span>
+                                </div>
+                                <div className="text-gray-800">
+                                    Total Closing Stock Value: <span className="text-blue-600">₹{calculateTotals().totalClosingStockValue.toLocaleString()}</span>
+                                </div>
+                                <div className="text-gray-800">
+                                    Total Amount: <span className="text-green-600">₹{calculateTotals().totalAmount.toLocaleString()}</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        {currentUser.type === 'sub' && (
+                            <div className="mt-6">
+                                <label className="block text-gray-800 font-semibold mb-2">Notes</label>
+                                <textarea
+                                    value={notes}
+                                    onChange={(e) => setNotes(e.target.value)}
+                                    placeholder="Add any notes or comments here..."
+                                    className="w-full border-2 border-gray-300 rounded-lg px-4 py-3 text-black min-h-32 resize-y"
+                                />
+                            </div>
+                        )}
                     </div>
                 )}
             </div>
